@@ -151,3 +151,21 @@ automation:
 
 Reacting to a physical keypad press (from the `event` entities added in
 v0.4) pairs naturally with this — e.g. press a key, update its label.
+
+---
+
+## Resilience / link recovery (v0.6+)
+
+C-Gate keeps answering `noop` on the command port even when the C-Bus
+**network interface** has closed — so a keepalive alone can't tell that
+events have stopped flowing. The integration now:
+
+- polls `InterfaceState` every ~30 s and **reopens the network** if it has
+  closed (C-Gate's `auto-reopen` plus a proactive `net open`);
+- after any recovery — a closed network reopening, or the event/load-change
+  sockets reattaching — runs a **full state resync** (re-reads every load
+  group's level, ~0.7 s here) so entities can't be left stale for a change
+  that happened while the link was down.
+
+Resync updates carry no source unit, so they never fire spurious motion or
+keypad `event`s.

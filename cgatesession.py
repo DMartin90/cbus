@@ -1,7 +1,7 @@
 import asyncio
 import logging
 import re
-from typing import Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -52,6 +52,19 @@ class CGateSession:
         self.port_event = port_event
         self.port_status = port_status
         self.keepalive_interval = keepalive_interval
+
+        # Project / network context, set by __init__ so the keepalive can
+        # watch the C-Bus network interface and reopen it if it closes.
+        self.project: Optional[str] = None
+        self.network: Optional[str] = None
+        # How often (in keepalive cycles) to poll InterfaceState.
+        self._netcheck_every = 6
+        self._ka_count = 0
+        self._net_running = True
+        self._resync_running = False
+        # Async callback (coordinator.async_resync) run after a recovery to
+        # refresh HA state for anything missed while the link was down.
+        self._resync_callback: Optional[Callable[[], Any]] = None
 
         # Streams
         self._cmd_reader: Optional[asyncio.StreamReader] = None
@@ -137,6 +150,69 @@ class CGateSession:
     def set_group_update_callback(self, cb):
         """Coordinator registers a callback for all group-level events."""
         self._group_update_callback = cb
+
+    def set_context(self, project: str, network: str) -> None:
+        """Record project/network so the keepalive can watch the interface."""
+        self.project = project
+        self.network = str(network)
+
+    def set_resync_callback(self, cb: Callable[[], Any]) -> None:
+        """Register an async callback run after a link recovery to refresh state."""
+        self._resync_callback = cb
+
+    async def _trigger_resync(self, reason: str) -> None:
+        if self._resync_callback is None or self._resync_running:
+            return
+        self._resync_running = True
+        try:
+            _LOGGER.info("C-Gate link recovered (%s) — resyncing state", reason)
+            await self._resync_callback()
+        except Exception as exc:  # noqa: BLE001
+            _LOGGER.warning("Resync after %s failed: %s", reason, exc)
+        finally:
+            self._resync_running = False
+
+    async def check_network(self) -> bool:
+        """Poll the C-Bus network InterfaceState; reopen it if it has closed.
+
+        C-Gate keeps answering ``noop`` on the command port even when the
+        network interface is closed, so the keepalive alone can't tell that
+        events have stopped. Returns True if the interface is running.
+        """
+        if not self.project or not self.network:
+            return True
+
+        path = f"//{self.project}/{self.network}"
+        try:
+            resp = await self.send_command(f"get {path} InterfaceState")
+        except Exception:  # noqa: BLE001
+            return False  # command-layer problem; handled by reconnect logic
+
+        state = None
+        for line in resp:
+            m = re.search(r"InterfaceState=(\w+)", line)
+            if m:
+                state = m.group(1).lower()
+
+        if state == "running":
+            if not self._net_running:
+                self._net_running = True
+                await self._trigger_resync("network back to running")
+            return True
+
+        # Not running: flag it and (re)open only from a settled closed state,
+        # so we don't spam net-open while it is already opening/syncing.
+        if self._net_running:
+            _LOGGER.warning("C-Bus network %s InterfaceState=%s", path, state)
+        self._net_running = False
+
+        if state in ("closed", "new", None):
+            try:
+                _LOGGER.warning("Reopening C-Bus network %s", path)
+                await self.send_command(f"net open {path}")
+            except Exception as exc:  # noqa: BLE001
+                _LOGGER.warning("net open %s failed: %s", path, exc)
+        return False
 
     def register_group_callback(self, project, network, app, group, callback):
         """Legacy per-group callback (kept for flexibility)."""
@@ -599,6 +675,7 @@ class CGateSession:
                     continue
 
                 loop = asyncio.get_running_loop()
+                reattached = False
 
                 # 2) If EVENT stream has died, try to reconnect it in the background
                 if self._event_reader is None and not self._closed:
@@ -609,6 +686,7 @@ class CGateSession:
                                 self._read_event_stream()
                             )
                             _LOGGER.info("Reattached C-Gate EVENT stream after loss")
+                            reattached = True
                     except Exception as exc2:
                         _LOGGER.warning(
                             "Failed to reconnect EVENT port: %s", exc2
@@ -625,10 +703,23 @@ class CGateSession:
                             _LOGGER.info(
                                 "Reattached C-Gate LOAD-CHANGE stream after loss"
                             )
+                            reattached = True
                     except Exception as exc3:
                         _LOGGER.warning(
                             "Failed to reconnect LOAD-CHANGE port: %s", exc3
                         )
+
+                # 4) Periodically confirm the C-Bus network is still open.
+                #    (noop keeps succeeding even when the interface has closed,
+                #    which would silently stop all events.)
+                self._ka_count += 1
+                if self._ka_count % self._netcheck_every == 0 and not self._closed:
+                    await self.check_network()
+
+                # 5) A stream reattach means we were blind for a moment —
+                #    refresh state so entities aren't left stale.
+                if reattached and not self._closed:
+                    await self._trigger_resync("event stream reattach")
 
         except asyncio.CancelledError:
             return

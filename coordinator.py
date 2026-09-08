@@ -186,6 +186,37 @@ class CBusCoordinator:
             pass
 
     # ------------------------------------------------------------------
+    # Recovery
+    # ------------------------------------------------------------------
+
+    async def async_resync(self) -> None:
+        """Re-poll every load group's level from C-Gate and push to entities.
+
+        Called after the C-Gate link recovers (socket reattach or the C-Bus
+        network reopening) so HA reflects any changes missed while blind.
+        Polled updates carry no source unit, so they don't fire spurious
+        motion / keypad events.
+        """
+        count = 0
+        for net_id, net in self.discovery_model.items():
+            for app_id, app in net.get("applications", {}).items():
+                for gid, gi in app.get("groups", {}).items():
+                    if not gi.get("is_load"):
+                        continue
+                    try:
+                        lvl = await self.session.get_group_level(
+                            self.project_name, net_id, int(app_id), int(gid)
+                        )
+                    except Exception:  # noqa: BLE001
+                        continue
+                    if lvl is not None:
+                        self.handle_group_update(
+                            self.project_name, net_id, int(app_id), int(gid), int(lvl)
+                        )
+                        count += 1
+        _LOGGER.info("cbus: resync refreshed %d group levels", count)
+
+    # ------------------------------------------------------------------
     # Incoming C-Gate events
     # ------------------------------------------------------------------
 

@@ -76,6 +76,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
 
     session.register_global_callback(handle_global_event)
 
+    # 4b) Give the session its network context + a resync hook so the
+    #     keepalive can watch/reopen the C-Bus interface and refresh state.
+    session.set_context(project, network)
+    session.set_resync_callback(coordinator.async_resync)
+
     # 5) Load platforms (light, sensor)
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
