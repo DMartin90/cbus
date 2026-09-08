@@ -41,19 +41,31 @@ class CBusDiscovery:
         self.hass = hass
         self.entry = entry
         self.session: CGateSession | None = None
-        self._overrides = {}
-        try:
-            if os.path.exists(OVERRIDES_PATH):
-                self._overrides = json.load(open(OVERRIDES_PATH))
-                _LOGGER.info("cbus: loaded %d group overrides", len(self._overrides))
-        except Exception as e:  # noqa: BLE001
-            _LOGGER.warning("cbus: override load failed: %s", e)
+        self._overrides: Dict[str, Any] = {}
+
+    @staticmethod
+    def _load_overrides_file(path: str) -> Dict[str, Any]:
+        """Blocking file read — must run in an executor, not the event loop."""
+        if not os.path.exists(path):
+            return {}
+        with open(path, encoding="utf-8") as fh:
+            return json.load(fh)
 
     async def async_discover(self) -> Dict[str, Any]:
         assert self.session is not None
 
         project = self.entry.data[CONF_PROJECT]
         network = str(self.entry.data[CONF_NETWORK])
+
+        try:
+            self._overrides = await self.hass.async_add_executor_job(
+                self._load_overrides_file, OVERRIDES_PATH
+            )
+            if self._overrides:
+                _LOGGER.info("cbus: loaded %d group overrides", len(self._overrides))
+        except Exception as e:  # noqa: BLE001
+            _LOGGER.warning("cbus: override load failed: %s", e)
+            self._overrides = {}
 
         model = {network: {"applications": {}, "units": {}}}
 
