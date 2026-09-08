@@ -5,6 +5,11 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 _LOGGER = logging.getLogger(__name__)
 
+
+def _now_iso() -> str:
+    from datetime import datetime, timezone
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
 # Match C-Gate response codes: "300 something..."
 CODE_RE = re.compile(r"^(\d{3})\s")
 
@@ -65,6 +70,21 @@ class CGateSession:
         # Async callback (coordinator.async_resync) run after a recovery to
         # refresh HA state for anything missed while the link was down.
         self._resync_callback: Optional[Callable[[], Any]] = None
+
+        # Link health: True while the command port is up AND the C-Bus
+        # network interface is running. Entities use it for availability.
+        self._link_ok = True
+        self._link_callback: Optional[Callable[[bool], None]] = None
+        self.server_version: Optional[str] = None
+        self.stats: Dict[str, Any] = {
+            "reconnects": 0,
+            "stream_reattaches": 0,
+            "resyncs": 0,
+            "last_resync": None,
+            "network_state": None,
+            "last_link_change": None,
+            "last_link_reason": None,
+        }
 
         # Streams
         self._cmd_reader: Optional[asyncio.StreamReader] = None
@@ -160,6 +180,29 @@ class CGateSession:
         """Register an async callback run after a link recovery to refresh state."""
         self._resync_callback = cb
 
+    def set_link_callback(self, cb: Callable[[bool], None]) -> None:
+        """Register a sync callback invoked when link health changes."""
+        self._link_callback = cb
+
+    @property
+    def link_ok(self) -> bool:
+        return self._link_ok
+
+    def _set_link(self, ok: bool, reason: str) -> None:
+        if ok == self._link_ok:
+            return
+        self._link_ok = ok
+        self.stats["last_link_change"] = _now_iso()
+        self.stats["last_link_reason"] = reason
+        (_LOGGER.info if ok else _LOGGER.warning)(
+            "C-Gate link %s (%s)", "UP" if ok else "DOWN", reason
+        )
+        if self._link_callback:
+            try:
+                self._link_callback(ok)
+            except Exception as exc:  # noqa: BLE001
+                _LOGGER.error("Link callback failed: %s", exc)
+
     async def _trigger_resync(self, reason: str) -> None:
         if self._resync_callback is None or self._resync_running:
             return
@@ -167,6 +210,8 @@ class CGateSession:
         try:
             _LOGGER.info("C-Gate link recovered (%s) — resyncing state", reason)
             await self._resync_callback()
+            self.stats["resyncs"] += 1
+            self.stats["last_resync"] = _now_iso()
         except Exception as exc:  # noqa: BLE001
             _LOGGER.warning("Resync after %s failed: %s", reason, exc)
         finally:
@@ -193,8 +238,10 @@ class CGateSession:
             m = re.search(r"InterfaceState=(\w+)", line)
             if m:
                 state = m.group(1).lower()
+        self.stats["network_state"] = state
 
         if state == "running":
+            self._set_link(True, "network running")
             if not self._net_running:
                 self._net_running = True
                 await self._trigger_resync("network back to running")
@@ -205,6 +252,7 @@ class CGateSession:
         if self._net_running:
             _LOGGER.warning("C-Bus network %s InterfaceState=%s", path, state)
         self._net_running = False
+        self._set_link(False, f"network {state}")
 
         if state in ("closed", "new", None):
             try:
@@ -355,20 +403,44 @@ class CGateSession:
                 return m.group(2).strip()
         return None
 
-    async def set_group_level(self, project, network, app, group, level):
-        """Send ON / OFF / RAMP commands."""
+    @staticmethod
+    def _ramp_time_arg(seconds) -> str | None:
+        """Format an HA transition (s) as a C-Gate ramp-time: 1-2 digits + s|m."""
+        if seconds is None:
+            return None
+        try:
+            s = int(round(float(seconds)))
+        except (TypeError, ValueError):
+            return None
+        if s <= 0:
+            return None
+        if s <= 99:
+            return f"{s}s"
+        return f"{min(99, max(1, round(s / 60)))}m"
+
+    async def set_group_level(self, project, network, app, group, level, ramp_time=None):
+        """Send ON / OFF / RAMP commands.
+
+        ``ramp_time`` (seconds, e.g. HA's ``transition``) makes any level
+        change a timed ramp: ``ramp path level 4s``. C-Gate 3.x rounds to the
+        nearest C-Bus ramp rate.
+        """
         path = f"//{project}/{network}/{app}/{group}"
-        level = int(level)
+        level = max(0, min(255, int(level)))
+        rt = self._ramp_time_arg(ramp_time)
+
+        if rt:
+            cmd = f"ramp {path} {level} {rt}"
 
         # OFF
-        if level <= 0:
+        elif level <= 0:
             cmd = f"off {path}"
 
         # FULL ON
         elif level >= 255:
             cmd = f"on {path}"
 
-        # STANDARD RAMP (C-Gate v2 does NOT support ramp time or force)
+        # STANDARD RAMP (instant)
         else:
             cmd = f"ramp {path} {level}"
 
@@ -447,7 +519,12 @@ class CGateSession:
         self._cmd_reader = None
 
         _LOGGER.info("Reconnecting command port...")
-        await self._open_command_connection()
+        try:
+            await self._open_command_connection()
+        except Exception:
+            self._set_link(False, "command port reconnect failed")
+            raise
+        self.stats["reconnects"] += 1
 
     # -------------------------------------------------------------------------
     # Connection open
@@ -456,7 +533,12 @@ class CGateSession:
     async def _open_command_connection(self) -> None:
         reader, writer = await asyncio.open_connection(self.host, self.port_cmd)
         greet = await reader.readline()
-        _LOGGER.debug("Command greeting: %s", greet.decode().strip())
+        greet_txt = greet.decode(errors="ignore").strip()
+        _LOGGER.debug("Command greeting: %s", greet_txt)
+        # "201 Service ready: Schneider Electric C-Gate Version: v3.7.1 (build 2287) ..."
+        m = re.search(r"Version:\s*(v?[\d.]+(?:\s*\(build \d+\))?)", greet_txt)
+        if m:
+            self.server_version = m.group(1)
         self._cmd_reader = reader
         self._cmd_writer = writer
 
@@ -671,8 +753,11 @@ class CGateSession:
                     await self.send_command("noop")
                 except Exception as exc:
                     _LOGGER.warning("Keepalive failed: %s", exc)
+                    self._set_link(False, "command port unreachable")
                     # Don't immediately kill the loop; we may recover.
                     continue
+                if self._net_running:
+                    self._set_link(True, "command port ok")
 
                 loop = asyncio.get_running_loop()
                 reattached = False
@@ -719,6 +804,7 @@ class CGateSession:
                 # 5) A stream reattach means we were blind for a moment —
                 #    refresh state so entities aren't left stale.
                 if reattached and not self._closed:
+                    self.stats["stream_reattaches"] += 1
                     await self._trigger_resync("event stream reattach")
 
         except asyncio.CancelledError:

@@ -1,0 +1,25 @@
+{
+  "title": "C-Bus (C-Gate)",
+  "config": {
+    "step": {
+      "user": {
+        "title": "Connect to C-Gate",
+        "description": "Enter the C-Gate server details. The default ports are C-Gate's plaintext command (20023), event (20024) and load-change (20025) ports.",
+        "data": {
+          "host": "C-Gate host / IP",
+          "project": "C-Gate project name",
+          "network": "C-Bus network number",
+          "port_cmd": "Command port",
+          "port_event": "Event port",
+          "port_status": "Load-change port"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Could not connect to C-Gate, or the project could not be selected. Check the host, ports, project name, and that C-Gate's access.txt allows this client."
+    },
+    "abort": {
+      "already_configured": "This C-Gate project/network is already configured."
+    }
+  }
+}

@@ -29,7 +29,7 @@ from .const import (
     INPUT_ROLES,
     ROLE_LOAD,
 )
-from .device import unit_device_info
+from .device import hub_device_info, unit_device_info
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -67,7 +67,12 @@ class CBusCoordinator:
             UnitKey, list[Callable[[int, int, int], None]]
         ] = defaultdict(list)
 
+        # Link health (command port up AND network running) for availability
+        self.link_ok: bool = True
+        self._link_listeners: list[Callable[[bool], None]] = []
+
         self.session.set_group_update_callback(self.handle_group_update)
+        self.session.set_link_callback(self.handle_link_change)
 
         _LOGGER.info(
             "CBusCoordinator initialised for project=%s network=%s",
@@ -78,6 +83,16 @@ class CBusCoordinator:
     # ------------------------------------------------------------------
     # Model helpers
     # ------------------------------------------------------------------
+
+    def lighting_groups(self):
+        """Yield (network_id, app_id:int, group_id:int, group_info) for every
+        group of every lighting-type application discovered."""
+        for network_id, net in self.discovery_model.items():
+            for app_id, app in net.get("applications", {}).items():
+                if app.get("type") != "lighting":
+                    continue
+                for gid, gi in app.get("groups", {}).items():
+                    yield str(network_id), int(app_id), int(gid), gi
 
     def units(self, network: str | None = None) -> Dict[str, Any]:
         net = self.discovery_model.get(str(network or self.network_id), {})
@@ -103,6 +118,14 @@ class CBusCoordinator:
         if not unit:
             return None
         return unit_device_info(self.project_name, str(network or self.network_id), unit)
+
+    def hub_device_info(self, network: str | None = None):
+        return hub_device_info(
+            self.project_name,
+            str(network or self.network_id),
+            getattr(self.session, "host", None),
+            getattr(self.session, "server_version", None),
+        )
 
     def device_info_for_group(self, app: int, group: int, network: str | None = None):
         """DeviceInfo of the output unit that drives this group (first load
@@ -184,6 +207,38 @@ class CBusCoordinator:
             self._unit_callbacks[key].remove(callback)
         except (KeyError, ValueError):
             pass
+
+    # ------------------------------------------------------------------
+    # Link health
+    # ------------------------------------------------------------------
+
+    def add_link_listener(self, cb: Callable[[bool], None]) -> Callable[[], None]:
+        """Subscribe to link up/down changes; returns an unsubscribe fn."""
+        self._link_listeners.append(cb)
+
+        def _unsub() -> None:
+            try:
+                self._link_listeners.remove(cb)
+            except ValueError:
+                pass
+
+        return _unsub
+
+    def handle_link_change(self, ok: bool) -> None:
+        self.link_ok = bool(ok)
+        for cb in list(self._link_listeners):
+            try:
+                cb(self.link_ok)
+            except Exception as exc:  # noqa: BLE001
+                _LOGGER.error("Link listener failed: %s", exc)
+
+    @property
+    def link_info(self) -> Dict[str, Any]:
+        info = dict(getattr(self.session, "stats", {}))
+        info["link_ok"] = self.link_ok
+        info["cgate_version"] = getattr(self.session, "server_version", None)
+        info["host"] = getattr(self.session, "host", None)
+        return info
 
     # ------------------------------------------------------------------
     # Recovery

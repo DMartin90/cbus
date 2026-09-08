@@ -22,6 +22,7 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .const import ATTR_UNIT, ATTR_UNIT_TYPE, DOMAIN, ROLE_PIR
 from .coordinator import CBusCoordinator
+from .entity import CBusLinkMixin
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -54,7 +55,7 @@ async def async_setup_entry(
         _LOGGER.info("No C-Bus light-level sensors found.")
 
 
-class CBusLightLevelSensor(SensorEntity):
+class CBusLightLevelSensor(CBusLinkMixin, SensorEntity):
     _attr_should_poll = True
     _attr_has_entity_name = True
     _attr_name = "Light level"
@@ -79,7 +80,15 @@ class CBusLightLevelSensor(SensorEntity):
         self._attr_unique_id = f"cbus_lux_{project}_{network}_p{self._unit}"
         self._attr_device_info = coordinator.device_info_for_unit(self._unit, network)
 
+    async def async_added_to_hass(self) -> None:
+        self._attach_link_listener()
+
+    async def async_will_remove_from_hass(self) -> None:
+        self._detach_link_listener()
+
     async def async_update(self) -> None:
+        if not self.coordinator.link_ok:
+            return
         try:
             raw = await self.coordinator.session.get_unit_param(
                 self.project, self.network, self._unit, "LightLevel"

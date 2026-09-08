@@ -21,6 +21,10 @@ OVERRIDES_PATH = "/config/cbus_overrides.json"
 # C-Gate uses 255 as "unassigned" in unit slot / widget tables
 UNASSIGNED = 255
 
+# C-Bus lighting-type applications ($30..$5F)
+LIGHTING_APP_MIN = 0x30
+LIGHTING_APP_MAX = 0x5F
+
 
 class CBusDiscovery:
     """Discovery using GET + DBGET + name classification.
@@ -78,13 +82,33 @@ class CBusDiscovery:
         load_types = self._load_types_by_group(model[network]["units"])
         input_units = self._input_units_by_group(model[network]["units"])
 
-        model[network]["applications"]["56"] = await self._discover_app(
-            project, network, "56", load_types, input_units
-        )
+        # Every lighting-type application present on the network (C-Bus
+        # lighting apps occupy $30-$5F; 56/$38 is the default).
+        for app_id in await self._lighting_apps(project, network):
+            model[network]["applications"][str(app_id)] = await self._discover_app(
+                project, network, str(app_id), load_types, input_units
+            )
 
         self._annotate_groups(model[network])
 
         return model
+
+    async def _lighting_apps(self, project: str, network: str) -> List[int]:
+        try:
+            lines = await self.session.send_command(f"get //{project}/{network} Applications")
+        except Exception as ex:  # noqa: BLE001
+            _LOGGER.debug("Application enumeration failed (%s); assuming 56", ex)
+            return [56]
+        apps: List[int] = []
+        for line in lines:
+            m = PARAM_LINE_RE.match(line)
+            if m and m.group(1).startswith("Applications="):
+                apps.extend(self._parse_int_list(m.group(1)[len("Applications="):]))
+        lighting = sorted(a for a in set(apps) if LIGHTING_APP_MIN <= a <= LIGHTING_APP_MAX)
+        if not lighting:
+            lighting = [56]
+        _LOGGER.info("Lighting applications on //%s/%s: %s", project, network, lighting)
+        return lighting
 
     async def _safe_cmd(self, cmd: str):
         try:
@@ -101,14 +125,19 @@ class CBusDiscovery:
         project: str,
         network: str,
         app_id: str,
-        load_types: Dict[int, List[str]] | None = None,
-        input_units: Dict[int, List[int]] | None = None,
+        load_types: Dict[tuple, List[str]] | None = None,
+        input_units: Dict[tuple, List[int]] | None = None,
     ):
         app = {"type": "lighting", "name": f"Lighting {app_id}", "groups": {}}
+        app_num = int(app_id)
         load_types = load_types or {}
         # None => unit roles unknown (legacy heuristics); {} => known, none
         roles_known = input_units is not None
         input_units = input_units or {}
+        # The overrides file is authoritative for the default lighting app
+        # (plain "gid" keys); other apps use "app/gid" keys and otherwise
+        # auto-classify.
+        overrides_authoritative = bool(self._overrides) and app_num == 56
 
         # Read group list
         try:
@@ -152,8 +181,10 @@ class CBusDiscovery:
                 name = params.get("Name", "").strip() or f"Group {gid}"
             _LOGGER.debug("DISCOVERY: gid=%s name=%s units=%s", gid, name, units)
 
-            _ov = self._overrides.get(str(gid))
-            if self._overrides:
+            _ov = self._overrides.get(f"{app_num}/{gid}")
+            if _ov is None and app_num == 56:
+                _ov = self._overrides.get(str(gid))
+            if _ov or overrides_authoritative:
                 if not _ov:
                     continue
                 device_class = _ov.get("device_class", "light")
@@ -165,8 +196,8 @@ class CBusDiscovery:
                 device_class, is_load, dimmable = self._classify(
                     name,
                     units,
-                    load_types.get(gid),
-                    input_units.get(gid, []) if roles_known else None,
+                    load_types.get((app_num, gid)),
+                    input_units.get((app_num, gid), []) if roles_known else None,
                 )
 
             # Unused channels ("Relay 1/11 Spare") still get entities, but
@@ -276,26 +307,29 @@ class CBusDiscovery:
         return slots
 
     @staticmethod
-    def _load_types_by_group(units: Dict[str, Any]) -> Dict[int, List[str]]:
-        """group number -> unit Types of the output units driving it."""
-        out: Dict[int, List[str]] = {}
+    def _load_types_by_group(units: Dict[str, Any]) -> Dict[tuple, List[str]]:
+        """(app, group) -> unit Types of the output units driving it."""
+        out: Dict[tuple, List[str]] = {}
         for unit in units.values():
             if unit.get("role") != ROLE_LOAD:
                 continue
+            app = int(unit.get("app", 56))
             for g in unit.get("groups", []):
-                out.setdefault(int(g), []).append(unit.get("type", ""))
+                out.setdefault((app, int(g)), []).append(unit.get("type", ""))
         return out
 
     @staticmethod
-    def _input_units_by_group(units: Dict[str, Any]) -> Dict[int, List[int]]:
-        """group number -> addresses of keypads / eDLTs / PIRs programmed to it."""
-        out: Dict[int, List[int]] = {}
+    def _input_units_by_group(units: Dict[str, Any]) -> Dict[tuple, List[int]]:
+        """(app, group) -> addresses of keypads / eDLTs / PIRs programmed to it."""
+        out: Dict[tuple, List[int]] = {}
         for unit in units.values():
             if unit.get("role") not in INPUT_ROLES:
                 continue
-            targets = [s["group"] for s in unit.get("slots", [])] or unit.get("groups", [])
-            for g in targets:
-                out.setdefault(int(g), []).append(int(unit["address"]))
+            app = int(unit.get("app", 56))
+            targets = [(int(s.get("app", app)), int(s["group"])) for s in unit.get("slots", [])] \
+                or [(app, int(g)) for g in unit.get("groups", [])]
+            for key in targets:
+                out.setdefault(key, []).append(int(unit["address"]))
         return out
 
     def _annotate_groups(self, net_model: Dict[str, Any]) -> None:
@@ -310,10 +344,11 @@ class CBusDiscovery:
             else:
                 continue
 
-            app_id = str(unit.get("app", 56))
-            groups = apps.get(app_id, {}).get("groups", {})
-            for g in unit.get("groups", []):
-                gi = groups.get(str(g))
+            app = int(unit.get("app", 56))
+            targets = [(int(s.get("app", app)), int(s["group"])) for s in unit.get("slots", [])] \
+                or [(app, int(g)) for g in unit.get("groups", [])]
+            for a, g in targets:
+                gi = apps.get(str(a), {}).get("groups", {}).get(str(g))
                 if gi is not None and unit["address"] not in gi[field]:
                     gi[field].append(unit["address"])
 

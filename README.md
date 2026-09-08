@@ -169,3 +169,27 @@ events have stopped flowing. The integration now:
 
 Resync updates carry no source unit, so they never fire spurious motion or
 keypad `event`s.
+
+---
+
+## v0.7 additions
+
+- **Link health & availability.** A `binary_sensor.<hub>_link` (connectivity,
+  diagnostic) shows whether the C-Gate command port is up *and* the C-Bus
+  network interface is running; its attributes carry reconnect / stream
+  reattach / resync counters, the last link change and reason, and the
+  C-Gate version. All C-Bus entities go **unavailable** while the link is
+  down instead of showing stale state.
+- **Light transitions.** `light.turn_on` / `turn_off` honour `transition:`
+  (seconds) → C-Gate `ramp <group> <level> <n>s` (C-Gate rounds to the
+  nearest C-Bus ramp rate). Works from HomeKit fades too.
+- **Diagnostics.** Settings → Integrations → C-Bus → *Download diagnostics*
+  gives the full discovery model (units, slots, groups), link stats, live
+  levels and last-source-unit per group. Host is redacted.
+- **Hub device.** A "C-Gate <project>/<network>" device (with C-Gate version)
+  that every unit device hangs off via `via_device`.
+- **All lighting applications.** Discovery enumerates every lighting-type
+  application on the network (`$30`–`$5F`), not just 56. Override keys for
+  non-default apps use `"app/group"` (e.g. `"65/1"`); plain `"group"` keys
+  apply to app 56 only, and the file is authoritative for app 56 only.
+- Config-flow field labels (`strings.json` / translations).

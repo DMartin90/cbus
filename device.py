@@ -62,8 +62,26 @@ def unit_identifier(project: str, network: str, address: int) -> tuple[str, str]
     return (DOMAIN, f"{project}_{network}_p{int(address)}")
 
 
+def hub_identifier(project: str, network: str) -> tuple[str, str]:
+    return (DOMAIN, f"{project}_{network}_cgate")
+
+
+def hub_device_info(
+    project: str, network: str, host: str | None = None, version: str | None = None
+) -> DeviceInfo:
+    """DeviceInfo for the C-Gate server / C-Bus network (the 'hub')."""
+    return DeviceInfo(
+        identifiers={hub_identifier(project, network)},
+        name=f"C-Gate {project}/{network}",
+        manufacturer=MANUFACTURER,
+        model="C-Gate",
+        sw_version=version or None,
+        configuration_url=None,
+    )
+
+
 def unit_device_info(project: str, network: str, unit: Dict[str, Any]) -> DeviceInfo:
-    """Build DeviceInfo for a physical C-Bus unit."""
+    """Build DeviceInfo for a physical C-Bus unit (hangs off the hub device)."""
     address = int(unit["address"])
     unit_type = unit.get("type") or "unknown"
     catalog = unit.get("catalog")
@@ -75,4 +93,5 @@ def unit_device_info(project: str, network: str, unit: Dict[str, Any]) -> Device
         manufacturer=MANUFACTURER,
         model=model,
         sw_version=unit.get("firmware") or None,
+        via_device=hub_identifier(project, network),
     )

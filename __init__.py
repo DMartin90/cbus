@@ -1,6 +1,7 @@
 import logging
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers import device_registry as dr
 
 from .const import (
     DOMAIN,
@@ -80,6 +81,19 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
     #     keepalive can watch/reopen the C-Bus interface and refresh state.
     session.set_context(project, network)
     session.set_resync_callback(coordinator.async_resync)
+
+    # 4c) Register the hub device (C-Gate / network) up front so unit devices
+    #     can reference it via via_device.
+    dev_reg = dr.async_get(hass)
+    hub = coordinator.hub_device_info()
+    dev_reg.async_get_or_create(
+        config_entry_id=entry.entry_id,
+        identifiers=hub["identifiers"],
+        manufacturer=hub.get("manufacturer"),
+        name=hub.get("name"),
+        model=hub.get("model"),
+        sw_version=hub.get("sw_version"),
+    )
 
     # 5) Load platforms (light, sensor)
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)

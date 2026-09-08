@@ -1,7 +1,7 @@
 {
   "domain": "cbus",
   "name": "C-Bus (C-Gate)",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "documentation": "https://github.com/DMartin90/cbus",
   "codeowners": [
     "@DMartin90"

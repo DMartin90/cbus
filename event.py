@@ -29,6 +29,7 @@ from .const import (
     ROLE_KEYPAD,
 )
 from .coordinator import CBusCoordinator
+from .entity import CBusLinkMixin
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -63,7 +64,7 @@ async def async_setup_entry(
         _LOGGER.info("No C-Bus keypads found.")
 
 
-class CBusKeypadEvent(EventEntity):
+class CBusKeypadEvent(CBusLinkMixin, EventEntity):
     _attr_should_poll = False
     _attr_has_entity_name = True
     _attr_name = "Keys"
@@ -91,11 +92,13 @@ class CBusKeypadEvent(EventEntity):
         self.coordinator.register_unit_callback(
             self._unit, self._on_unit_event, project=self.project, network=self.network
         )
+        self._attach_link_listener()
 
     async def async_will_remove_from_hass(self) -> None:
         self.coordinator.unregister_unit_callback(
             self._unit, self._on_unit_event, project=self.project, network=self.network
         )
+        self._detach_link_listener()
 
     def _slot_for(self, app: int, group: int) -> int | None:
         for s in self._slots:
