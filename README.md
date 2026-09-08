@@ -8,11 +8,28 @@ Within the cbus folder, place all the files into
 
 ---
 
+## How groups are classified
+
+Discovery reads the physical units first, so it knows which relay or dimmer
+channel drives each lighting group. Classification then goes, in order:
+
+1. name contains `exhaust` / `ex fan` → `switch` with an exhaust-fan icon
+2. name contains `fan` → `fan` (Low / Medium / High presets)
+3. driven by a **dimmer** (`DIM*`) → `light`, dimmable
+4. driven by a **relay** (`REL*`) → `light` (on/off) — unless the name is
+   clearly a non-light load (`gate`, `motor`, `hot water`, `pump`, `door`,
+   `rsd`, `blind`, `outlet`, `charger`, …) → `switch`. Light words
+   (`light`, `lamp`, `flood`, `d/l`, `led`, …) always win, so "Gate Floods"
+   is a light and "Gate Motor" is a switch.
+5. programmed on keypads only (no output unit) → `switch` (a virtual /
+   scene / flag group, e.g. a PIR override)
+6. `Type=area` groups and groups with no units → no entity
+
+Groups named `… Spare` get entities that are **disabled by default**.
+
 ## Group classification overrides (optional)
 
-By default the integration guesses each C-Bus lighting group's type from its
-name and unit count (see `discovery.py._classify`). That heuristic can
-misclassify loads — most commonly it can't tell a dimmer from a relay.
+If the rules above still get something wrong you can pin the answer.
 
 To pin ground-truth types, drop a file at **`/config/cbus_overrides.json`** on
 your Home Assistant instance. See `cbus_overrides.sample.json` for the format:
@@ -33,3 +50,49 @@ your Home Assistant instance. See `cbus_overrides.sample.json` for the format:
 **When the overrides file is present it is authoritative:** only the groups
 listed in it are created as entities; unlisted groups are skipped. Remove the
 file to fall back to name/unit auto-classification.
+
+---
+
+## Physical units, PIR motion, and keypad events (v0.4+)
+
+Discovery now also enumerates every physical unit on the network
+(`get //proj/net Units` → `get //proj/net/p/N *` + `dbget`) and classifies it:
+
+| Role      | C-Gate unit types                          | What you get in HA                                   |
+|-----------|--------------------------------------------|------------------------------------------------------|
+| `load`    | `RELDN*`, `RELAY*`, `DIMDN*`, `DIM*`       | A **device** per relay/dimmer; its groups' light/switch/fan entities attach to it |
+| `keypad`  | `KEYE*`, `KEYEIR*`, other `KEY*` (Saturn/Neo) | A device + an **`event` entity** (`on` / `off` / `ramp`) fired on physical key presses |
+| `edlt`    | `KEYGL*` (glass eDLT), `DLT*`              | Same as keypad; key slots come from the eDLT `WidgetGroups` table |
+| `pir`     | `SENPIR*`                                  | A device + **`binary_sensor` (motion)** + **`sensor` (lux)** if the unit reports `LightLevel` |
+
+### How motion / key presses are derived
+
+C-Bus input units don't publish their own "pressed" or "motion" telegrams —
+they are programmed to switch lighting groups directly. C-Gate, however, tags
+every group change with the unit that originated it (`#sourceunit=N` on the
+load-change port). The integration uses that:
+
+- **`binary_sensor.<pir>_motion`** turns **on** when the PIR unit itself
+  switches one of its groups on, and **off** when that group goes to 0 (PIR
+  timeout, a keypad, or HA). Attributes: `group`, `group_name`, `last_motion`.
+- **`event.<keypad>_keys`** fires `on` / `off` / `ramp` whenever that keypad
+  originates a change. Attributes: `group`, `group_name`, `level`, `slot`
+  (key position). The entity also lists all its `keys` as an attribute.
+- Additionally every input-unit originated change is published on the HA
+  event bus as **`cbus_unit_event`** with `unit`, `unit_name`, `unit_type`,
+  `app`, `group`, `group_name`, `level`, `slot` — handy for automations:
+
+```yaml
+trigger:
+  - platform: event
+    event_type: cbus_unit_event
+    event_data:
+      unit_name: "EDLT1 Kitchen"
+      group: 69          # Gate Motor key
+```
+
+- **`sensor.<pir>_light_level`** polls the PIR's `LightLevel` parameter
+  (lux, 0–1600, refreshed by C-Gate's parameter sync) every 2 minutes.
+
+A group that lives only on keypads (no relay/dimmer) is attached to the first
+keypad's device; list it in `cbus_overrides.json` as a `switch` to expose it.

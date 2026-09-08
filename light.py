@@ -52,6 +52,7 @@ async def async_setup_entry(
                     group=int(group_id),
                     name=name,
                     dimmable=bool(group_info.get("dimmable", True)),
+                    enabled_default=bool(group_info.get("enabled_default", True)),
                 )
             )
 
@@ -68,9 +69,10 @@ class CBusLight(LightEntity):
     _attr_supported_color_modes = {ColorMode.BRIGHTNESS}
     _attr_color_mode = ColorMode.BRIGHTNESS
 
-    def __init__(self, coordinator: CBusCoordinator, project: str, network: str, app: int, group: int, name: str, dimmable: bool = True):
+    def __init__(self, coordinator: CBusCoordinator, project: str, network: str, app: int, group: int, name: str, dimmable: bool = True, enabled_default: bool = True):
         self.coordinator = coordinator
         self._dimmable = dimmable
+        self._attr_entity_registry_enabled_default = enabled_default
         if dimmable:
             self._attr_supported_color_modes = {ColorMode.BRIGHTNESS}
             self._attr_color_mode = ColorMode.BRIGHTNESS
@@ -84,6 +86,7 @@ class CBusLight(LightEntity):
 
         self._attr_name = name
         self._attr_unique_id = f"cbus_light_{project}_{network}_{app}_{group}"
+        self._attr_device_info = coordinator.device_info_for_group(app, group, network)
 
     async def async_added_to_hass(self) -> None:
         key = (self.project, self.network, self._app, self._group)

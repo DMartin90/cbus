@@ -112,6 +112,7 @@ async def async_setup_entry(
                     app=56,
                     group=int(group_id),
                     name=group_info.get("name", f"Fan {group_id}"),
+                    enabled_default=bool(group_info.get("enabled_default", True)),
                 )
             )
 
@@ -149,8 +150,10 @@ class CBusFan(FanEntity):
         app: int,
         group: int,
         name: str,
+        enabled_default: bool = True,
     ) -> None:
         self.coordinator = coordinator
+        self._attr_entity_registry_enabled_default = enabled_default
         self.project = str(project)
         self.network = str(network)
         self._app = int(app)
@@ -159,6 +162,9 @@ class CBusFan(FanEntity):
         self._attr_name = name
         self._attr_unique_id = (
             f"cbus_fan_{self.project}_{self.network}_{self._app}_{self._group}"
+        )
+        self._attr_device_info = coordinator.device_info_for_group(
+            self._app, self._group, self.network
         )
 
     # ------------------------------------------------------------------

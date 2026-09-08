@@ -1,0 +1,6 @@
+{
+  "name": "C-Bus (C-Gate)",
+  "content_in_root": true,
+  "render_readme": true,
+  "homeassistant": "2024.8.0"
+}

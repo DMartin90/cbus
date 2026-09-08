@@ -25,6 +25,14 @@ LIGHTING_RE = re.compile(
     re.IGNORECASE,
 )
 
+# C-Gate tags every event / load-change line with the unit that originated
+# the change:  "... #sourceunit=12 OID=..."  (load-change port)
+#              "... new level=255 sourceunit=12 ramptime=0"  (event port, 730)
+SOURCEUNIT_RE = re.compile(r"#?sourceunit=(\d+)", re.IGNORECASE)
+
+# "300 //PROJ/254/p/12: LightLevel=123"  (GET on a unit parameter)
+PARAM_VALUE_RE = re.compile(r"^3\d\d[-\s]+//[^:]+:\s+([A-Za-z0-9_]+)=(.*)$")
+
 
 class CGateSession:
     """Async connection to C-Gate with event forwarding to HA."""
@@ -139,13 +147,15 @@ class CGateSession:
         """Legacy global callback."""
         self._global_callbacks.append(callback)
 
-    def _emit_group_update(self, project, network, app, group, level):
+    def _emit_group_update(self, project, network, app, group, level, source_unit=None):
         """Unified event fan-out."""
 
-        # 1) Coordinator (primary path)
+        # 1) Coordinator (primary path) — receives the originating unit too
         if self._group_update_callback:
             try:
-                self._group_update_callback(project, network, app, group, level)
+                self._group_update_callback(
+                    project, network, app, group, level, source_unit=source_unit
+                )
             except Exception as exc:
                 _LOGGER.error("Coordinator callback failed: %s", exc)
 
@@ -185,6 +195,19 @@ class CGateSession:
             m = re.search(r"level=(\d+)", line)
             if m:
                 return int(m.group(1))
+        return None
+
+    async def get_unit_param(self, project, network, unit, param):
+        """Read a single parameter of a physical unit, e.g. LightLevel on a PIR.
+
+        Returns the raw string value, or None if C-Gate did not report it.
+        """
+        path = f"//{project}/{network}/p/{int(unit)}"
+        resp = await self.send_command(f"get {path} {param}")
+        for line in resp:
+            m = PARAM_VALUE_RE.match(line)
+            if m and m.group(1).lower() == param.lower():
+                return m.group(2).strip()
         return None
 
     async def set_group_level(self, project, network, app, group, level):
@@ -429,6 +452,9 @@ class CGateSession:
             self._status_writer = None
 
     def _handle_event_line(self, line: str):
+        m_src = SOURCEUNIT_RE.search(line)
+        source_unit = int(m_src.group(1)) if m_src else None
+
         m_light = LIGHTING_RE.search(line)
         if m_light:
             action, project, net, app, group, lvl = m_light.groups()
@@ -451,10 +477,9 @@ class CGateSession:
             else:
                 return
 
-            self._emit_group_update(project, net, int(app), int(group), int(level))
-            return
-    
-            self._emit_group_update(project, net, int(app), int(group), int(level))
+            self._emit_group_update(
+                project, net, int(app), int(group), int(level), source_unit
+            )
             return
 
         lower = line.lower()
@@ -464,7 +489,9 @@ class CGateSession:
             m2 = re.search(r"//([^/]+)/(\d+)/(\d+)/(\d+)", line)
             if m2:
                 project, net, app, group = m2.groups()
-                self._emit_group_update(project, net, int(app), int(group), 255)
+                self._emit_group_update(
+                    project, net, int(app), int(group), 255, source_unit
+                )
             return
 
         # 4) state=off events (assume 0)
@@ -472,7 +499,9 @@ class CGateSession:
             m2 = re.search(r"//([^/]+)/(\d+)/(\d+)/(\d+)", line)
             if m2:
                 project, net, app, group = m2.groups()
-                self._emit_group_update(project, net, int(app), int(group), 0)
+                self._emit_group_update(
+                    project, net, int(app), int(group), 0, source_unit
+                )
             return
 
     # -------------------------------------------------------------------------

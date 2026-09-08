@@ -43,6 +43,7 @@ async def async_setup_entry(hass, entry, async_add_entities):
                 int(gid),
                 g["name"],
                 g["device_class"],
+                enabled_default=bool(g.get("enabled_default", True)),
             )
             entities.append(e)
 
@@ -56,8 +57,9 @@ class CBusSwitch(SwitchEntity):
 
     _attr_should_poll = False
 
-    def __init__(self, coord, project, network, app, group, name, device_class):
+    def __init__(self, coord, project, network, app, group, name, device_class, enabled_default: bool = True):
         self.coordinator = coord
+        self._attr_entity_registry_enabled_default = enabled_default
         self.project = project
         self.network = network
         self._app = int(app)
@@ -66,6 +68,7 @@ class CBusSwitch(SwitchEntity):
         self._device_class = device_class
 
         self._attr_unique_id = f"cbus_switch_{project}_{network}_{app}_{group}"
+        self._attr_device_info = coord.device_info_for_group(app, group, network)
 
         # Icon override for exhaust fans
         if device_class == "exhaust":
