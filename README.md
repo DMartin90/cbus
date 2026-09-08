@@ -96,3 +96,58 @@ trigger:
 
 A group that lives only on keypads (no relay/dimmer) is attached to the first
 keypad's device; list it in `cbus_overrides.json` as a `switch` to expose it.
+
+---
+
+## Dynamic eDLT labels (v0.5+) — `cbus.set_label`
+
+Push text to the glass eDLT / DLT keypad widgets so Home Assistant data
+(Sonos track, temperature, alarm state) shows on the physical keypads.
+
+Labels are addressed by **C-Bus group number** — the eDLT renders it on
+whichever widget is mapped to that group (see the discovery log for each
+eDLT's slot→group map).
+
+```yaml
+service: cbus.set_label
+data:
+  group: 69          # e.g. the "Gate Motor" widget on EDLT1 Kitchen
+  text: "Gate Open"  # max 14 chars
+```
+
+| Field | Default | Notes |
+|-------|---------|-------|
+| `group` | — | C-Bus group whose widget label to set (required) |
+| `text` | `""` | label text, ≤14 chars (truncated, whitespace collapsed) |
+| `clear` | `false` | clear the label instead of setting text |
+| `variant` | `F0` | widget label variant `F0`–`F3` |
+| `unicode` | `true` | use `LIGHTING UNICODELABEL` (**required for glass 5055EDL eDLTs**); non-ASCII text is sent as raw UTF-8 |
+| `language` | `1` | C-Bus label language code |
+| `action_sel` | `-` | action selector; leave unset for a plain label |
+| `icon` | — | numeric icon selector (non-unicode labels only) |
+| `app` / `network` / `project` | `56` / configured | advanced overrides |
+
+> **Glass eDLTs use unicode labels.** Once a group/variant holds a unicode
+> label, C-Gate refuses plain-text labels for it — hence `unicode` defaults
+> to on. Use `unicode: false` only for legacy DLTs. If a label doesn't
+> appear, try a different `variant` (F0–F3) to match the widget.
+
+### Example — show Sonos status on a keypad
+
+```yaml
+automation:
+  - alias: "eDLT: Sonos now playing"
+    trigger:
+      - platform: state
+        entity_id: media_player.kitchen_sonos
+    action:
+      - service: cbus.set_label
+        data:
+          group: 40      # Kitchen Main D/L widget on EDLT1
+          text: >-
+            {{ 'Vol ' ~ (state_attr('media_player.kitchen_sonos','volume_level')*100)|round(0)|int ~ '%'
+               if is_state('media_player.kitchen_sonos','playing') else 'Idle' }}
+```
+
+Reacting to a physical keypad press (from the `event` entities added in
+v0.4) pairs naturally with this — e.g. press a key, update its label.

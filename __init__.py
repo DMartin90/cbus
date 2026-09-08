@@ -14,6 +14,7 @@ from .const import (
 from .cgatesession import CGateSession
 from .discovery import CBusDiscovery
 from .coordinator import CBusCoordinator
+from .services import async_register_services, async_unregister_services
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -78,6 +79,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
     # 5) Load platforms (light, sensor)
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
+    # 6) Integration-wide services (cbus.set_label)
+    await async_register_services(hass)
+
     _LOGGER.info("C-Bus integration setup complete for project=%s, network=%s", project, network)
     return True
 
@@ -96,5 +100,6 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry):
     except Exception:  # noqa: BLE001
         pass
 
+    await async_unregister_services(hass)
     await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
     return True

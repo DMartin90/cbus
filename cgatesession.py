@@ -197,6 +197,75 @@ class CGateSession:
                 return int(m.group(1))
         return None
 
+    async def send_label(
+        self,
+        project,
+        network,
+        app,
+        group,
+        text: str = "",
+        *,
+        language: int = 1,
+        variant: str | None = "F0",
+        action_sel: str = "-",
+        unicode: bool = True,
+        icon: int | None = None,
+        clear: bool = False,
+        max_length: int = 14,
+    ) -> List[str]:
+        """Set (or clear) a dynamic label on eDLT / DLT devices for a group.
+
+        Wraps C-Gate ``LIGHTING LABEL`` / ``LIGHTING UNICODELABEL``. Glass
+        eDLTs (5055EDL / KEYGL5) use unicode labels — once set, plain-text
+        labels are refused for that group/variant — so ``unicode`` defaults
+        to True. Returns the C-Gate response lines (raises on 4xx).
+        """
+        cmd = self._build_label_cmd(
+            project, network, app, group, text,
+            language=language, variant=variant, action_sel=action_sel,
+            unicode=unicode, icon=icon, clear=clear, max_length=max_length,
+        )
+        _LOGGER.debug("LABEL >> %s", cmd)
+        resp = await self.send_command(cmd)
+        _LOGGER.debug("LABEL << %s", "; ".join(resp))
+        return resp
+
+    @staticmethod
+    def _build_label_cmd(
+        project, network, app, group, text,
+        *, language, variant, action_sel, unicode, icon, clear, max_length,
+    ) -> str:
+        app_path = f"//{project}/{network}/{int(app)}"
+        parts = ["lighting", "unicodelabel" if unicode else "label",
+                 app_path, str(int(language)), str(int(group))]
+
+        parts.append(action_sel if action_sel else "-")
+
+        v = (variant or "").upper()
+        if v:
+            if v not in ("F0", "F1", "F2", "F3"):
+                raise ValueError(f"variant must be F0-F3, got {variant!r}")
+            parts.append(v)
+        elif unicode:
+            # UNICODELABEL requires a variant; default to F0
+            parts.append("F0")
+
+        if icon is not None and not unicode:
+            parts += ["icon", str(int(icon))]
+            return " ".join(parts)
+
+        # Text label (single line — strip anything that would break the command)
+        if clear:
+            parts.append("text")   # no text-label => clears the label
+            return " ".join(parts)
+
+        clean = " ".join(str(text).split())[:max_length]
+        if unicode and not clean.isascii():
+            parts += ["raw", clean.encode("utf-8").hex()]
+        else:
+            parts += ["text", clean]
+        return " ".join(parts)
+
     async def get_unit_param(self, project, network, unit, param):
         """Read a single parameter of a physical unit, e.g. LightLevel on a PIR.
 

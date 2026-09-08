@@ -1,0 +1,96 @@
+set_label:
+  name: Set eDLT label
+  description: >-
+    Push a dynamic text label to eDLT / DLT keypad widgets for a C-Bus group.
+    Lets you show Home Assistant data (Sonos track, temperature, alarm state)
+    on the physical keypads.
+  fields:
+    group:
+      name: Group
+      description: C-Bus lighting group number whose eDLT widget label to set.
+      required: true
+      example: 69
+      selector:
+        number:
+          min: 0
+          max: 255
+          mode: box
+    text:
+      name: Text
+      description: Label text (max 14 characters; longer is truncated).
+      example: "Sonos 42%"
+      selector:
+        text:
+    clear:
+      name: Clear
+      description: Clear the label instead of setting text.
+      default: false
+      selector:
+        boolean:
+    variant:
+      name: Variant
+      description: >-
+        Label variant/flavour on the widget (F0-F3). eDLT widgets can hold
+        several label variants; F0 is the default.
+      default: "F0"
+      selector:
+        select:
+          options: ["F0", "F1", "F2", "F3"]
+    unicode:
+      name: Unicode
+      description: >-
+        Use the unicode label command (required for glass eDLTs / 5055EDL).
+        Turn off only for legacy DLTs that use plain-text labels.
+      default: true
+      selector:
+        boolean:
+    language:
+      name: Language
+      description: C-Bus label language code (usually 1).
+      default: 1
+      advanced: true
+      selector:
+        number:
+          min: 0
+          max: 255
+          mode: box
+    action_sel:
+      name: Action selector
+      description: Action selector; leave as "-" (unset) for a plain label.
+      default: "-"
+      advanced: true
+      selector:
+        text:
+    icon:
+      name: Icon
+      description: >-
+        Numeric icon selector (0-65535) to show instead of text.
+        Non-unicode labels only.
+      advanced: true
+      selector:
+        number:
+          min: 0
+          max: 65535
+          mode: box
+    app:
+      name: Application
+      description: C-Bus application address (56 = lighting).
+      default: 56
+      advanced: true
+      selector:
+        number:
+          min: 0
+          max: 255
+          mode: box
+    network:
+      name: Network
+      description: C-Bus network number (defaults to the configured network).
+      advanced: true
+      selector:
+        text:
+    project:
+      name: Project
+      description: C-Gate project name (defaults to the configured project).
+      advanced: true
+      selector:
+        text:
