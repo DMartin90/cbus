@@ -93,5 +93,8 @@ def unit_device_info(project: str, network: str, unit: Dict[str, Any]) -> Device
         manufacturer=MANUFACTURER,
         model=model,
         sw_version=unit.get("firmware") or None,
-        via_device=hub_identifier(project, network),
+        # NOTE: no via_device here — HA 2026.9 deprecates the DeviceInfo
+        # via_device path (wants via_device_id) and refuses to add entities
+        # that carry it. Units stay standalone devices; the hub device is
+        # registered separately in __init__.
     )
