@@ -1,0 +1,4 @@
+__pycache__/
+*.py[cod]
+# Site-specific classification data lives on the HA instance, not in the repo
+cbus_overrides.json

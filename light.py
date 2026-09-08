@@ -51,6 +51,7 @@ async def async_setup_entry(
                     app=56,
                     group=int(group_id),
                     name=name,
+                    dimmable=bool(group_info.get("dimmable", True)),
                 )
             )
 
@@ -67,8 +68,15 @@ class CBusLight(LightEntity):
     _attr_supported_color_modes = {ColorMode.BRIGHTNESS}
     _attr_color_mode = ColorMode.BRIGHTNESS
 
-    def __init__(self, coordinator: CBusCoordinator, project: str, network: str, app: int, group: int, name: str):
+    def __init__(self, coordinator: CBusCoordinator, project: str, network: str, app: int, group: int, name: str, dimmable: bool = True):
         self.coordinator = coordinator
+        self._dimmable = dimmable
+        if dimmable:
+            self._attr_supported_color_modes = {ColorMode.BRIGHTNESS}
+            self._attr_color_mode = ColorMode.BRIGHTNESS
+        else:
+            self._attr_supported_color_modes = {ColorMode.ONOFF}
+            self._attr_color_mode = ColorMode.ONOFF
         self.project = project
         self.network = network
         self._app = int(app)
@@ -109,6 +117,8 @@ class CBusLight(LightEntity):
 
     @property
     def brightness(self):
+        if not self._dimmable:
+            return None
         lvl = self._current_level
         if lvl >= 255:
             return 255

@@ -20,6 +20,15 @@ class CBusDiscovery:
         self.hass = hass
         self.entry = entry
         self.session: CGateSession | None = None
+        import json as _json, os as _os
+        self._overrides = {}
+        _ovp = "/config/cbus_overrides.json"
+        try:
+            if _os.path.exists(_ovp):
+                self._overrides = _json.load(open(_ovp))
+                _LOGGER.warning("cbus: loaded %d group overrides", len(self._overrides))
+        except Exception as _e:
+            _LOGGER.warning("cbus: override load failed: %s", _e)
 
     async def async_discover(self) -> Dict[str, Any]:
         assert self.session is not None
@@ -89,18 +98,30 @@ class CBusDiscovery:
             # DEBUG — REMOVE LATER
             _LOGGER.warning("DISCOVERY: gid=%s name=%s units=%s", gid, name, units)
     
-            device_class, is_load = self._classify(name, units)
-            
+            _ov = self._overrides.get(str(gid))
+            if self._overrides:
+                if not _ov:
+                    continue
+                device_class = _ov.get("device_class", "light")
+                is_load = True
+                dimmable = bool(_ov.get("dimmable", False))
+                if _ov.get("name"):
+                    name = _ov["name"]
+            else:
+                device_class, is_load = self._classify(name, units)
+                dimmable = (device_class == "light")
+
             # DEBUG — REMOVE LATER
             _LOGGER.warning(
-                "CLASSIFY: gid=%s → device_class=%s is_load=%s",
-                gid, device_class, is_load
+                "CLASSIFY: gid=%s → device_class=%s is_load=%s dimmable=%s",
+                gid, device_class, is_load, dimmable
             )
-    
+
             app["groups"][str(gid)] = {
                 "name": name,
                 "device_class": device_class,
                 "is_load": is_load,
+                "dimmable": dimmable,
                 "units": units,
             }
 

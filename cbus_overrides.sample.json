@@ -1,0 +1,6 @@
+{
+  "1":  { "device_class": "light",  "dimmable": true,  "name": "Kitchen Downlights" },
+  "12": { "device_class": "light",  "dimmable": false, "name": "Pantry" },
+  "34": { "device_class": "fan",    "dimmable": false, "name": "Master Ceiling Fan" },
+  "40": { "device_class": "switch", "dimmable": false, "name": "Garden Irrigation" }
+}
